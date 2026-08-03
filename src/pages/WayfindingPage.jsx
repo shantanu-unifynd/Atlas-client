@@ -8,9 +8,11 @@ import {
   computeRoute,
 } from '../services/wayfinding.service';
 import PlanView from '../components/PlanView';
+import Scene3D from '../components/Scene3D';
+import { hasWebGL } from '../utils/webgl';
 
-// C1 — 2D wayfinding: load a READY floor's plan + graph, let the visitor pick a
-// start and destination, compute the route and draw it on the plan.
+// C1 (2D) + C2 (3D) wayfinding: load a READY floor's plan + graph, pick a start
+// and destination, compute the route, and view it in 2D or as a 3D walk-through.
 function WayfindingPage() {
   const { buildingId, floorId } = useParams();
   const [params] = useSearchParams();
@@ -21,6 +23,9 @@ function WayfindingPage() {
   const [routePath, setRoutePath] = useState([]);
   const [routeInfo, setRouteInfo] = useState(null);
   const [computing, setComputing] = useState(false);
+  const [view, setView] = useState('2d');
+  const [playing, setPlaying] = useState(false);
+  const webglOk = useMemo(() => hasWebGL(), []);
 
   useEffect(() => {
     let alive = true;
@@ -49,7 +54,6 @@ function WayfindingPage() {
     [nodes]
   );
 
-  // Deep-link a destination via ?to=<label> (host app / QR).
   useEffect(() => {
     const to = params.get('to');
     if (!to || !nodes.length) return;
@@ -59,6 +63,7 @@ function WayfindingPage() {
 
   async function findRoute() {
     if (!originId || !destId || !load.graph) return;
+    setPlaying(false);
     setComputing(true);
     try {
       const res = await computeRoute(load.graph.id, originId, destId);
@@ -80,7 +85,6 @@ function WayfindingPage() {
       </main>
     );
   }
-
   if (load.error) {
     return (
       <main className="screen">
@@ -91,19 +95,52 @@ function WayfindingPage() {
   }
 
   const labelOf = (id) => nodes.find((n) => n.id === id)?.metadata?.label;
+  const hasRoute = routePath.length > 1;
 
   return (
     <div className="app">
       <header className="topbar">
         <span className="brand-sm">Atlas</span>
-        <span className="hint">Find your way</span>
+        <div className="viewtoggle">
+          <button className={view === '2d' ? 'active' : ''} onClick={() => { setView('2d'); setPlaying(false); }}>2D</button>
+          <button className={view === '3d' ? 'active' : ''} onClick={() => setView('3d')}>3D</button>
+        </div>
       </header>
 
       <div className="plan-wrap">
-        {load.svg ? (
-          <PlanView svg={load.svg} nodes={nodes} routePath={routePath} originId={originId} destId={destId} />
+        {view === '2d' ? (
+          load.svg ? (
+            <PlanView svg={load.svg} nodes={nodes} routePath={routePath} originId={originId} destId={destId} />
+          ) : (
+            <p className="hint">No floor plan available.</p>
+          )
         ) : (
-          <p className="hint">No floor plan available.</p>
+          <div className="scene">
+            {!webglOk ? (
+              <div className="scene-loading">
+                3D needs WebGL / hardware acceleration, which is off in this browser.
+                Turn on Chrome → Settings → System → “Use graphics acceleration when
+                available”, then reload — or use the 2D view.
+              </div>
+            ) : load.svg ? (
+              <Scene3D
+                svg={load.svg}
+                nodes={nodes}
+                routePath={routePath}
+                originId={originId}
+                destId={destId}
+                playing={playing}
+                onWalkEnd={() => setPlaying(false)}
+              />
+            ) : (
+              <p className="hint">No floor plan available.</p>
+            )}
+            {webglOk && hasRoute && (
+              <button className="walk-btn" onClick={() => setPlaying((p) => !p)}>
+                {playing ? 'Stop' : '▶ Walk-through'}
+              </button>
+            )}
+          </div>
         )}
       </div>
 
