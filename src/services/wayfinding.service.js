@@ -36,3 +36,11 @@ export async function computeRoute(graphId, originNodeId, destinationNodeId) {
   });
   return data;
 }
+
+// MPM-04: the render-ready Map Presentation Model for a floor (rooms/walls/
+// openings/labels/graph in one world coordinate system). Returns the render
+// payload (model.data).
+export async function getMapModel(floorId) {
+  const { data: model } = await api.get(`/floors/${floorId}/map-model`);
+  return model.data;
+}
