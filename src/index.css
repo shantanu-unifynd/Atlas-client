@@ -106,3 +106,24 @@ body {
   background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
   box-shadow: 0 6px 20px rgba(170,59,255,0.4);
 }
+
+/* --- C2-02 map viewport (zoom/pan + toggles) --- */
+.plan-wrap { padding: 0; }
+.mapviewport { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0e1116; cursor: grab; }
+.mapviewport:active { cursor: grabbing; }
+.maptransform { width: 100%; height: 100%; transform-origin: center center; }
+.maptransform svg { width: 100%; height: 100%; }
+
+.mapzoom { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+.mapzoom button {
+  width: 40px; height: 40px; border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(21,25,34,0.9); color: #f4f6fb; border-radius: 10px;
+  font-size: 16px; font-weight: 600; backdrop-filter: blur(4px);
+}
+.maptoggles { position: absolute; left: 12px; top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+.maptoggles button {
+  height: 30px; padding: 0 12px; border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(21,25,34,0.85); color: var(--muted); border-radius: 999px;
+  font-size: 12px; font-weight: 600; backdrop-filter: blur(4px);
+}
+.maptoggles button.active { background: var(--accent); color: #fff; border-color: transparent; }
