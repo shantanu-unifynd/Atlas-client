@@ -18,8 +18,9 @@ function resolveNodeId(value, nodes) {
 // Presentation Model (rooms/walls/labels/graph); the visitor picks start +
 // destination and the computed route is overlaid on top.
 function WayfindingPage() {
-  const { floorId } = useParams();
+  const { buildingId, floorId } = useParams();
   const [params, setSearchParams] = useSearchParams();
+  const embed = params.get('embed') === 'true';
 
   const [load, setLoad] = useState({ loading: true, error: null, mpm: null, notPublished: false });
   const [originId, setOriginId] = useState('');
@@ -60,8 +61,14 @@ function WayfindingPage() {
     setComputing(true);
     try {
       const res = await computeRoute(graph.navigationGraphId, oId, dId);
-      setRoutePath(res.path || []);
-      setRouteInfo({ hops: Math.max((res.path || []).length - 1, 0) });
+      const path = res.path || [];
+      setRoutePath(path);
+      setRouteInfo({ hops: Math.max(path.length - 1, 0) });
+      // C3-03 — notify the host of the computed route.
+      window.parent.postMessage(
+        { type: 'atlas-route', from: oId, to: dId, distance: res.totalCost ?? null, nodeCount: path.length },
+        '*'
+      );
     } catch {
       setRoutePath([]);
       setRouteInfo({ error: 'No route found between these points.' });
@@ -100,6 +107,40 @@ function WayfindingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [originId, destId]);
 
+  // C3-03 — embed bridge. Refs keep the message listener registered once while it
+  // always reads the latest nodes / compute fn.
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  const computeRef = useRef(computeRouteFor);
+  computeRef.current = computeRouteFor;
+
+  // Announce readiness to the host once, on load.
+  const readySent = useRef(false);
+  useEffect(() => {
+    if (readySent.current) return;
+    readySent.current = true;
+    window.parent.postMessage({ type: 'atlas-ready', floorId, buildingId }, '*');
+  }, [floorId, buildingId]);
+
+  // Listen for host route commands. Ignores our own posts (event.source === window
+  // when not framed) so it never loops; invalid node ids are ignored. Listener is
+  // removed on unmount.
+  useEffect(() => {
+    function onMessage(event) {
+      if (event.source === window) return;
+      const msg = event.data;
+      if (!msg || msg.type !== 'atlas-route') return;
+      const fromId = resolveNodeId(msg.from, nodesRef.current);
+      const toId = resolveNodeId(msg.to, nodesRef.current);
+      if (!fromId || !toId) return;
+      setOriginId(fromId);
+      setDestId(toId);
+      computeRef.current(fromId, toId);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   if (load.loading) return <main className="screen"><div className="brand">Atlas</div><p className="hint">Loading map…</p></main>;
   if (load.notPublished) return <main className="screen"><div className="brand">Atlas</div><p className="hint">Map not yet published</p><p className="hint">This floor’s map hasn’t been published yet. Please check back soon.</p></main>;
   if (load.error) return <main className="screen"><div className="brand">Atlas</div><p className="hint">{load.error}</p></main>;
@@ -108,10 +149,12 @@ function WayfindingPage() {
 
   return (
     <div className="app">
-      <header className="topbar">
-        <span className="brand-sm">Atlas</span>
-        <span className="hint">Find your way</span>
-      </header>
+      {!embed && (
+        <header className="topbar">
+          <span className="brand-sm">Atlas</span>
+          <span className="hint">Find your way</span>
+        </header>
+      )}
 
       <div className="plan-wrap">
         <MapViewport mpm={load.mpm} routePath={routePath} />
