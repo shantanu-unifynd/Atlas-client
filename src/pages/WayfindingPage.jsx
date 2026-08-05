@@ -45,6 +45,8 @@ function WayfindingPage() {
   const [computing, setComputing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
+  useEffect(() => { document.title = 'Atlas — Find your way'; }, []);
+
   useEffect(() => {
     let alive = true;
     (async () => {

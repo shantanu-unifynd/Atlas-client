@@ -9,6 +9,8 @@ function MapModelPage() {
   const { floorId } = useParams();
   const [state, setState] = useState({ loading: true, error: null, mpm: null });
 
+  useEffect(() => { document.title = 'Atlas — Map preview'; }, []);
+
   useEffect(() => {
     let alive = true;
     (async () => {
