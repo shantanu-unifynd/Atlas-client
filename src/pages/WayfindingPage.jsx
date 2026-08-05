@@ -14,6 +14,21 @@ function resolveNodeId(value, nodes) {
   return byLabel ? byLabel.id : null;
 }
 
+// C3-04 — centered full-page state (loading / empty / error). Reused for every
+// blocking state so they look consistent and never leave a blank screen.
+function StateScreen({ spinner, title, message, actionLabel, onAction }) {
+  return (
+    <main className="screen" role="status" aria-live="polite">
+      {spinner ? <div className="spinner" aria-hidden="true" /> : <div className="brand">Atlas</div>}
+      {title && <p className="state-title">{title}</p>}
+      {message && <p className="hint">{message}</p>}
+      {actionLabel && (
+        <button type="button" className="btn-primary" onClick={onAction}>{actionLabel}</button>
+      )}
+    </main>
+  );
+}
+
 // C2-01 — MPM-driven wayfinding. The floor is rendered ENTIRELY from the Map
 // Presentation Model (rooms/walls/labels/graph); the visitor picks start +
 // destination and the computed route is overlaid on top.
@@ -28,6 +43,7 @@ function WayfindingPage() {
   const [routePath, setRoutePath] = useState([]);
   const [routeInfo, setRouteInfo] = useState(null);
   const [computing, setComputing] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -47,7 +63,13 @@ function WayfindingPage() {
       }
     })();
     return () => { alive = false; };
-  }, [floorId]);
+  }, [floorId, reloadKey]);
+
+  // C3-04 — retry reloads the current floor's map without a full page reload.
+  function retry() {
+    setLoad({ loading: true, error: null, mpm: null, notPublished: false });
+    setReloadKey((k) => k + 1);
+  }
 
   const graph = load.mpm && load.mpm.graph;
   const nodes = (graph && graph.nodes) || [];
@@ -57,7 +79,9 @@ function WayfindingPage() {
   );
 
   async function computeRouteFor(oId, dId) {
-    if (!oId || !dId || !graph) return;
+    // C3-04 — bail if inputs missing or a computation is already in flight
+    // (prevents duplicate/overlapping route requests).
+    if (!oId || !dId || !graph || computing) return;
     setComputing(true);
     try {
       const res = await computeRoute(graph.navigationGraphId, oId, dId);
@@ -141,11 +165,12 @@ function WayfindingPage() {
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  if (load.loading) return <main className="screen"><div className="brand">Atlas</div><p className="hint">Loading map…</p></main>;
-  if (load.notPublished) return <main className="screen"><div className="brand">Atlas</div><p className="hint">Map not yet published</p><p className="hint">This floor’s map hasn’t been published yet. Please check back soon.</p></main>;
-  if (load.error) return <main className="screen"><div className="brand">Atlas</div><p className="hint">{load.error}</p></main>;
+  if (load.loading) return <StateScreen spinner title="Loading map…" />;
+  if (load.notPublished) return <StateScreen title="Map not yet published" message="This floor’s map hasn’t been published yet. Please check back soon." />;
+  if (load.error) return <StateScreen title="Couldn’t load the map" message={load.error} actionLabel="Retry" onAction={retry} />;
 
   const labelOf = (id) => nodes.find((n) => n.id === id)?.label;
+  const hasGraph = Boolean(graph && nodes.length);
 
   return (
     <div className="app">
@@ -160,23 +185,36 @@ function WayfindingPage() {
         <MapViewport mpm={load.mpm} routePath={routePath} />
       </div>
 
-      {routeInfo && (
-        <div className="routeinfo">
-          {routeInfo.error ? routeInfo.error : `To ${labelOf(destId) || ''} · ${routeInfo.hops} stop${routeInfo.hops === 1 ? '' : 's'}`}
+      {(computing || routeInfo) && (
+        <div className="routeinfo" role="status" aria-live="polite" aria-busy={computing}>
+          {computing
+            ? 'Computing route…'
+            : routeInfo.error
+              ? routeInfo.error
+              : `To ${labelOf(destId) || ''} · ${routeInfo.hops} stop${routeInfo.hops === 1 ? '' : 's'}`}
         </div>
       )}
 
-      <div className="controls">
-        <select value={originId} onChange={(e) => setOriginId(e.target.value)} aria-label="Start">
-          <option value="">From…</option>
-          {options.map((n) => <option key={n.id} value={n.id}>{n.label || n.id.slice(0, 6)}</option>)}
-        </select>
-        <select value={destId} onChange={(e) => setDestId(e.target.value)} aria-label="Destination">
-          <option value="">To…</option>
-          {options.map((n) => <option key={n.id} value={n.id}>{n.label || n.id.slice(0, 6)}</option>)}
-        </select>
-        <button onClick={findRoute} disabled={!originId || !destId || computing}>{computing ? '…' : 'Go'}</button>
-      </div>
+      {hasGraph ? (
+        <div className="controls">
+          <select value={originId} onChange={(e) => setOriginId(e.target.value)} aria-label="Start location">
+            <option value="">From…</option>
+            {options.map((n) => <option key={n.id} value={n.id}>{n.label || n.id.slice(0, 6)}</option>)}
+          </select>
+          <select value={destId} onChange={(e) => setDestId(e.target.value)} aria-label="Destination">
+            <option value="">To…</option>
+            {options.map((n) => <option key={n.id} value={n.id}>{n.label || n.id.slice(0, 6)}</option>)}
+          </select>
+          <button type="button" aria-label="Compute route" aria-busy={computing}
+            onClick={findRoute} disabled={!originId || !destId || computing}>
+            {computing ? 'Computing…' : 'Go'}
+          </button>
+        </div>
+      ) : (
+        <div className="controls">
+          <p className="hint" style={{ margin: 0 }}>Wayfinding isn’t available for this floor yet.</p>
+        </div>
+      )}
     </div>
   );
 }
