@@ -18,14 +18,21 @@ openable directly via QR/link. Talks to the Atlas backend API.
 - **C4 — Deploy + integrate**: static host, VITE_API_BASE_URL, CORS/CSP for the host
   domain, the <iframe> snippet + QR links.
 
+> Note: the **Manual Map Authoring** editor is an *admin* responsibility — it lives in
+> Atlas-frontend (admin), not here. Client = View / Search / Navigate only. See the
+> Admin roadmap (`Docs/roadmap/Atlas-adminPhase.md` → Atlas Studio).
+
 ## Later (post client-v1)
+
 Dedicated public wayfinding API (replace reuse-of-admin-endpoints; backend proposal),
 live positioning ("you are here"), multi-floor, accessibility (step-free),
 turn-by-turn, full-3D building.
 
 ## Run
+
 ```
 npm install
 npm run dev     # http://localhost:5174
 ```
+
 Backend must be running (admin API, default http://localhost:5000/api).

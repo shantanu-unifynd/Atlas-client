@@ -37,10 +37,11 @@ export async function computeRoute(graphId, originNodeId, destinationNodeId) {
   return data;
 }
 
-// MPM-04: the render-ready Map Presentation Model for a floor (rooms/walls/
-// openings/labels/graph in one world coordinate system). Returns the render
-// payload (model.data).
+// C3-01: consume ONLY the PUBLISHED Map Presentation Model — visitors never see
+// unpublished admin drafts. Returns the render payload (model.data), unchanged
+// shape. A floor with no published version responds 404, which the page turns
+// into a friendly "map not yet published" empty state.
 export async function getMapModel(floorId) {
-  const { data: model } = await api.get(`/floors/${floorId}/map-model`);
+  const { data: model } = await api.get(`/floors/${floorId}/map-model`, { params: { published: true } });
   return model.data;
 }
