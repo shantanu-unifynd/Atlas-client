@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { getMapModel, computeRoute } from '../services/wayfinding.service';
 import MapViewport from '../components/map/MapViewport';
+import Floor3D from '../components/map3d/Floor3D';
 
 // C3-02 — resolve a deep-link param to a node id. Matches by node id first, then
 // falls back to a case-insensitive label match (so both id- and label-style links
@@ -44,6 +45,7 @@ function WayfindingPage() {
   const [routeInfo, setRouteInfo] = useState(null);
   const [computing, setComputing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [view, setView] = useState('2d');
 
   useEffect(() => { document.title = 'Atlas — Find your way'; }, []);
 
@@ -184,7 +186,20 @@ function WayfindingPage() {
       )}
 
       <div className="plan-wrap">
-        <MapViewport mpm={load.mpm} routePath={routePath} />
+        {view === '3d'
+          ? <Floor3D mpm={load.mpm} />
+          : <MapViewport mpm={load.mpm} routePath={routePath} />}
+        <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 6, display: 'flex', gap: 4,
+          background: '#fff', borderRadius: 10, padding: 3, boxShadow: '0 4px 14px rgba(20,35,45,.16)' }}>
+          {['2d', '3d'].map((m) => (
+            <button key={m} type="button" onClick={() => setView(m)} aria-pressed={view === m}
+              style={{ border: 0, borderRadius: 8, padding: '6px 13px', fontSize: 13, fontWeight: 700,
+                cursor: 'pointer', fontFamily: 'inherit',
+                background: view === m ? '#2563eb' : 'transparent', color: view === m ? '#fff' : '#5c6b78' }}>
+              {m.toUpperCase()}
+            </button>
+          ))}
+        </div>
       </div>
 
       {(computing || routeInfo) && (

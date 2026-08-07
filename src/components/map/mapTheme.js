@@ -3,11 +3,11 @@
 export const mapTheme = {
   bg: '#0e1116',
   room: {
-    semanticFill: 'rgba(124,92,255,0.10)',
-    semanticStroke: 'rgba(124,92,255,0.45)',
-    manualFill: 'rgba(75,140,255,0.15)',
-    manualStroke: 'rgba(75,140,255,0.62)',
-    point: 'rgba(124,92,255,0.5)',
+    semanticFill: 'rgba(124,92,255,0.28)',
+    semanticStroke: 'rgba(150,120,255,0.85)',
+    manualFill: 'rgba(75,140,255,0.32)',
+    manualStroke: 'rgba(110,165,255,0.9)',
+    point: 'rgba(124,92,255,0.7)',
   },
   wall: '#b7bfcd',
   opening: { door: '#e8590c', passage: '#5b8cff' },
