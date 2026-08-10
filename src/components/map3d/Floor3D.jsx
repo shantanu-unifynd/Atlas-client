@@ -149,9 +149,15 @@ function RouteMesh({ graph, routePath }) {
   );
 }
 
-// Room labels as billboarded HTML sprites floating above the walls. To avoid a
-// jumble, only labels whose room has a real polygon footprint are shown — the
-// point-fallback rooms (no traced footprint yet) would just clutter the view.
+// Category → pin glyph (Woosmap-style icon markers).
+const ICONS = {
+  FASHION: '👗', FOOTWEAR: '👟', ELECTRONICS: '📱', JEWELRY: '💎', ACCESSORIES: '🕶️',
+  BEAUTY: '💄', 'F&B': '☕', LIFESTYLE: '🛍️', DEPARTMENT: '🏬', ENTERTAINMENT: '🎬',
+};
+
+// Shop markers as billboarded HTML pins floating above the blocks: a circular
+// icon badge (by category) with the shop name beneath. Only rooms with a real
+// polygon footprint get a pin, to avoid a jumble.
 function Labels({ mpm }) {
   const labels = (mpm && mpm.labels) || [];
   const roomsById = useMemo(
@@ -162,15 +168,21 @@ function Labels({ mpm }) {
     if (!l.position || !Number.isFinite(l.position.x)) return null;
     const room = roomsById.get(l.roomId);
     if (!room || !room.polygon) return null; // hide point-fallback labels
+    const icon = ICONS[(room.category || '').toUpperCase()] || '📍';
     return (
       <Html key={l.id} position={[l.position.x, LABEL_H, -l.position.y]} center sprite zIndexRange={[10, 0]}
-        style={{
-          pointerEvents: 'none', whiteSpace: 'nowrap', userSelect: 'none',
-          fontFamily: 'system-ui, sans-serif', fontWeight: 600,
-          fontSize: 13, color: '#1f2a37',
-          textShadow: '0 0 3px #fff, 0 1px 2px #fff, 0 -1px 2px #fff',
-        }}>
-        {l.text}
+        style={{ pointerEvents: 'none', userSelect: 'none' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-40%)' }}>
+          <div style={{
+            width: 26, height: 26, borderRadius: '50%', background: '#fff',
+            border: '2px solid #e8590c', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 14, lineHeight: 1, boxShadow: '0 2px 6px rgba(20,35,45,.28)',
+          }}>{icon}</div>
+          <div style={{
+            marginTop: 3, fontFamily: 'system-ui, sans-serif', fontWeight: 600, fontSize: 12,
+            color: '#1f2a37', whiteSpace: 'nowrap', textShadow: '0 0 3px #fff, 0 1px 2px #fff, 0 -1px 2px #fff',
+          }}>{l.text}</div>
+        </div>
       </Html>
     );
   });
