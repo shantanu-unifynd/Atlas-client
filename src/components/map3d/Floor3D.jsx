@@ -18,8 +18,20 @@ const ROUTE_H = 10;    // plan px the route line floats above the floor
 const ROUTE_R = 7;     // route tube radius (plan px)
 const LABEL_H = WALL_H + 45; // plan px — labels float above the walls
 
-// Flat filled polygon laid on the ground for a room footprint (color/context only).
-function RoomPatch({ polygon, color }) {
+// Soft mall palette by shop category (Woosmap-style calm fills). Falls back to a
+// neutral tint for uncategorised rooms.
+const PALETTE = {
+  FASHION: '#F6D9E3', FOOTWEAR: '#F4E2C9', ELECTRONICS: '#D6E4F5', JEWELRY: '#E7DCF7',
+  ACCESSORIES: '#FCE7C8', BEAUTY: '#F7D9D9', 'F&B': '#FBE6B8', LIFESTYLE: '#D9EFE4',
+  DEPARTMENT: '#DCE8FB', ENTERTAINMENT: '#E5DAF0',
+};
+function roomColor(r) {
+  return PALETTE[(r.category || '').toUpperCase()] || (r.source === 'MANUAL' ? '#DCE8FB' : '#EEF2F6');
+}
+
+// Flat filled polygon laid on the ground for a room footprint. `opacity` < 1 dims
+// it (used to fade non-route shops so the active path reads clearly).
+function RoomPatch({ polygon, color, opacity = 1 }) {
   const geometry = useMemo(() => {
     const shape = new THREE.Shape();
     polygon.forEach((p, i) => (i ? shape.lineTo(p.x, p.y) : shape.moveTo(p.x, p.y)));
@@ -31,8 +43,31 @@ function RoomPatch({ polygon, color }) {
 
   return (
     <mesh geometry={geometry} receiveShadow>
-      <meshStandardMaterial color={color} roughness={1} metalness={0} />
+      <meshStandardMaterial color={color} roughness={1} metalness={0} transparent={opacity < 1} opacity={opacity} />
     </mesh>
+  );
+}
+
+// Solid extruded shop block for a room-based floor: the whole footprint is raised
+// into a colored volume with edge outlines. `opacity` < 1 fades off-route shops.
+function RoomBlock({ polygon, color, opacity = 1 }) {
+  const { geometry, edges } = useMemo(() => {
+    const shape = new THREE.Shape();
+    polygon.forEach((p, i) => (i ? shape.lineTo(p.x, p.y) : shape.moveTo(p.x, p.y)));
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: WALL_H, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    return { geometry: geo, edges: new THREE.EdgesGeometry(geo, 20) };
+  }, [polygon]);
+
+  return (
+    <group>
+      <mesh geometry={geometry} castShadow receiveShadow>
+        <meshStandardMaterial color={color} roughness={0.9} metalness={0} transparent={opacity < 1} opacity={opacity} />
+      </mesh>
+      <lineSegments geometry={edges}>
+        <lineBasicMaterial color="#8A94A0" transparent opacity={opacity < 1 ? 0.35 : 0.85} />
+      </lineSegments>
+    </group>
   );
 }
 
@@ -160,9 +195,18 @@ function FloorModel({ mpm, routePath }) {
   // (wall-based floors like Phoenix). Otherwise raise each room's outline into
   // thin walls so room-based floors (e.g. August) still stand up as real rooms —
   // a room's polygon boundary is effectively its walls.
-  const wallLines = walls.length
-    ? walls
-    : polyRooms.map((r) => ({ id: `outline-${r.id}`, polyline: [...r.polygon, r.polygon[0]] }));
+  // Wall-based floors (real wall data, e.g. Phoenix) extrude their walls with flat
+  // room floors; room-based floors (e.g. August) raise each shop into a solid
+  // colored block instead.
+  const roomBased = !walls.length;
+
+  // Guide the eye (Woosmap-style): calm pastel shops; once a route is active, dim
+  // every shop except the origin/destination so the bright path is what stands out.
+  const nodeById = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n]));
+  const routeActive = (routePath || []).length > 1;
+  const originLabel = routeActive ? (nodeById.get(routePath[0]) || {}).label : null;
+  const destLabel = routeActive ? (nodeById.get(routePath[routePath.length - 1]) || {}).label : null;
+  const isEndpoint = (r) => r.name && (r.name === originLabel || r.name === destLabel);
 
   return (
     <group scale={[S, S, S]}>
@@ -171,10 +215,14 @@ function FloorModel({ mpm, routePath }) {
         <meshStandardMaterial color="#E9ECF0" roughness={1} />
       </mesh>
       <group position={[-cx, 0, cy]}>
-        {polyRooms.map((r) => (
-          <RoomPatch key={r.id} polygon={r.polygon} color={r.source === 'MANUAL' ? '#DCE8FB' : '#F4F7FA'} />
-        ))}
-        <WallsMesh walls={wallLines} />
+        {polyRooms.map((r) => {
+          const dim = routeActive && !isEndpoint(r);
+          const color = dim ? '#C7CDD6' : roomColor(r);
+          return roomBased
+            ? <RoomBlock key={r.id} polygon={r.polygon} color={color} opacity={dim ? 0.55 : 1} />
+            : <RoomPatch key={r.id} polygon={r.polygon} color={color} opacity={dim ? 0.5 : 1} />;
+        })}
+        {!roomBased && <WallsMesh walls={walls} />}
         <RouteMesh graph={graph} routePath={routePath} />
         <Labels mpm={mpm} />
       </group>
