@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, ContactShadows } from '@react-three/drei';
+import { OrbitControls, ContactShadows, Html } from '@react-three/drei';
 import * as THREE from 'three';
 
 // Milestone 2 — 2.5D floor renderer (Mappedin-style).
@@ -14,6 +14,9 @@ const WALL_H = 150;    // wall extrusion height (plan px) — short Mappedin-sty
 const WALL_T = 16;     // wall thickness (plan px)
 const S = 0.02;        // world scale (bounds ~2245px -> ~45 world units)
 const FLOOR_LIFT = 1;  // plan px the room patches sit above the plate (avoid z-fight)
+const ROUTE_H = 10;    // plan px the route line floats above the floor
+const ROUTE_R = 7;     // route tube radius (plan px)
+const LABEL_H = WALL_H + 45; // plan px — labels float above the walls
 
 // Flat filled polygon laid on the ground for a room footprint (color/context only).
 function RoomPatch({ polygon, color }) {
@@ -80,10 +83,69 @@ function WallsMesh({ walls }) {
   );
 }
 
-function FloorModel({ mpm }) {
+// Computed route as a tube floating just above the floor, with an origin sphere
+// and a destination pin. Node positions come from mpm.graph; a plan point (x,y)
+// maps to inner-group local (x, height, -y) — same convention as the walls.
+function RouteMesh({ graph, routePath }) {
+  const { curve, o, d } = useMemo(() => {
+    const pos = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n.position]));
+    const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
+    if (pts.length < 2) return { curve: null };
+    const vs = pts.map((p) => new THREE.Vector3(p.x, ROUTE_H, -p.y));
+    return { curve: new THREE.CatmullRomCurve3(vs), o: vs[0], d: vs[vs.length - 1] };
+  }, [graph, routePath]);
+
+  if (!curve) return null;
+  return (
+    <group>
+      <mesh castShadow>
+        <tubeGeometry args={[curve, Math.max(32, routePath.length * 6), ROUTE_R, 10, false]} />
+        <meshStandardMaterial color="#e8590c" emissive="#e8590c" emissiveIntensity={0.85} roughness={0.5} toneMapped={false} />
+      </mesh>
+      <mesh position={o}>
+        <sphereGeometry args={[ROUTE_R * 2, 24, 24]} />
+        <meshStandardMaterial color="#2563eb" emissive="#2563eb" emissiveIntensity={0.5} toneMapped={false} />
+      </mesh>
+      <mesh position={[d.x, d.y + ROUTE_R * 3, d.z]}>
+        <coneGeometry args={[ROUTE_R * 2, ROUTE_R * 5, 24]} />
+        <meshStandardMaterial color="#aa3bff" emissive="#aa3bff" emissiveIntensity={0.6} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+// Room labels as billboarded HTML sprites floating above the walls. Labels whose
+// room has a real polygon read as primary (bolder); point-fallback labels are
+// smaller and muted — mirrors the 2D LabelsLayer hierarchy.
+function Labels({ mpm }) {
+  const labels = (mpm && mpm.labels) || [];
+  const roomsById = useMemo(
+    () => new Map(((mpm && mpm.rooms) || []).map((r) => [r.id, r])),
+    [mpm]
+  );
+  return labels.map((l) => {
+    if (!l.position || !Number.isFinite(l.position.x)) return null;
+    const room = roomsById.get(l.roomId);
+    const primary = Boolean(room && room.polygon);
+    return (
+      <Html key={l.id} position={[l.position.x, LABEL_H, -l.position.y]} center sprite zIndexRange={[10, 0]}
+        style={{
+          pointerEvents: 'none', whiteSpace: 'nowrap', userSelect: 'none',
+          fontFamily: 'system-ui, sans-serif', fontWeight: primary ? 600 : 400,
+          fontSize: primary ? 13 : 11, color: '#1f2a37', opacity: primary ? 1 : 0.72,
+          textShadow: '0 0 3px #fff, 0 1px 2px #fff, 0 -1px 2px #fff',
+        }}>
+        {l.text}
+      </Html>
+    );
+  });
+}
+
+function FloorModel({ mpm, routePath }) {
   const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
   const rooms = (mpm && mpm.rooms) || [];
   const walls = (mpm && mpm.walls) || [];
+  const graph = mpm && mpm.graph;
   if (!cs) return null;
 
   const w = cs.maxX - cs.minX;
@@ -105,12 +167,14 @@ function FloorModel({ mpm }) {
           <RoomPatch key={r.id} polygon={r.polygon} color={r.source === 'MANUAL' ? '#DCE8FB' : '#F4F7FA'} />
         ))}
         <WallsMesh walls={walls} />
+        <RouteMesh graph={graph} routePath={routePath} />
+        <Labels mpm={mpm} />
       </group>
     </group>
   );
 }
 
-function Floor3D({ mpm }) {
+function Floor3D({ mpm, routePath = [] }) {
   const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
   const span = cs ? Math.max(cs.maxX - cs.minX, cs.maxY - cs.minY) * S : 45;
   const d = span * 0.95;
@@ -133,7 +197,7 @@ function Floor3D({ mpm }) {
       />
       <hemisphereLight args={['#ffffff', '#c4cdd8', 0.45]} />
 
-      <FloorModel mpm={mpm} />
+      <FloorModel mpm={mpm} routePath={routePath} />
 
       <ContactShadows position={[0, -0.98, 0]} opacity={0.4} scale={span * 1.6} blur={2.6} far={span} resolution={1024} color="#26313d" />
 

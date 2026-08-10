@@ -187,7 +187,7 @@ function WayfindingPage() {
 
       <div className="plan-wrap">
         {view === '3d'
-          ? <Floor3D mpm={load.mpm} />
+          ? <Floor3D mpm={load.mpm} routePath={routePath} />
           : <MapViewport mpm={load.mpm} routePath={routePath} />}
         <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 6, display: 'flex', gap: 4,
           background: '#fff', borderRadius: 10, padding: 3, boxShadow: '0 4px 14px rgba(20,35,45,.16)' }}>
