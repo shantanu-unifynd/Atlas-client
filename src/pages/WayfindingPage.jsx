@@ -47,6 +47,7 @@ function WayfindingPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [view, setView] = useState('2d');
   const [stepIdx, setStepIdx] = useState(0);
+  const [stepped, setStepped] = useState(false);
 
   useEffect(() => { document.title = 'Atlas — Find your way'; }, []);
 
@@ -91,20 +92,25 @@ function WayfindingPage() {
     const pts = routePath.map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
     if (pts.length < 2) return [];
     const dest = nodes.find((n) => n.id === routePath[routePath.length - 1])?.label || 'your destination';
-    const steps = [{ icon: '↑', text: 'Head toward the walkway' }];
+    // Cumulative arc length → each step carries its fraction `t` (0..1) along the route.
+    const cum = [0];
+    for (let i = 1; i < pts.length; i += 1) cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    const total = cum[pts.length - 1] || 1;
+    const steps = [{ icon: '↑', text: 'Head toward the walkway', t: 0 }];
     for (let i = 1; i < pts.length - 1; i += 1) {
       const a = pts[i - 1], b = pts[i], c = pts[i + 1];
       const ix = b.x - a.x, iy = b.y - a.y, ox = c.x - b.x, oy = c.y - b.y;
       const ang = (Math.atan2(ix * oy - iy * ox, ix * ox + iy * oy) * 180) / Math.PI;
       if (Math.abs(ang) < 25) continue; // effectively straight
       const right = ang > 0;
-      steps.push({ icon: right ? '↱' : '↰', text: `${Math.abs(ang) > 115 ? 'Sharp t' : 'T'}urn ${right ? 'right' : 'left'}, then walk straight` });
+      steps.push({ icon: right ? '↱' : '↰', t: cum[i] / total,
+        text: `${Math.abs(ang) > 115 ? 'Sharp t' : 'T'}urn ${right ? 'right' : 'left'}, then walk straight` });
     }
-    steps.push({ icon: '📍', text: `Arrive at ${dest}` });
+    steps.push({ icon: '📍', text: `Arrive at ${dest}`, t: 1 });
     return steps;
   }, [graph, routePath, nodes]);
 
-  useEffect(() => { setStepIdx(0); }, [routePath]);
+  useEffect(() => { setStepIdx(0); setStepped(false); }, [routePath]);
 
   async function computeRouteFor(oId, dId) {
     // C3-04 — bail if inputs missing or a computation is already in flight
@@ -211,7 +217,7 @@ function WayfindingPage() {
 
       <div className="plan-wrap">
         {view === '3d'
-          ? <Floor3D mpm={load.mpm} routePath={routePath} />
+          ? <Floor3D mpm={load.mpm} routePath={routePath} focusT={stepped ? (stepList[stepIdx]?.t ?? null) : null} />
           : <MapViewport mpm={load.mpm} routePath={routePath} />}
         <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 6, display: 'flex', gap: 4,
           background: '#fff', borderRadius: 10, padding: 3, boxShadow: '0 4px 14px rgba(20,35,45,.16)' }}>
@@ -233,10 +239,10 @@ function WayfindingPage() {
             <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{stepList[stepIdx]?.icon}</span>
             <span style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.15 }}>{stepList[stepIdx]?.text}</span>
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-              <button type="button" aria-label="Previous step" onClick={() => setStepIdx((i) => Math.max(0, i - 1))}
+              <button type="button" aria-label="Previous step" onClick={() => { setStepped(true); setStepIdx((i) => Math.max(0, i - 1)); }}
                 disabled={stepIdx === 0}
                 style={{ border: 0, background: 'rgba(255,255,255,.7)', borderRadius: 8, width: 26, height: 26, cursor: 'pointer', fontWeight: 800, fontSize: 16 }}>‹</button>
-              <button type="button" aria-label="Next step" onClick={() => setStepIdx((i) => Math.min(stepList.length - 1, i + 1))}
+              <button type="button" aria-label="Next step" onClick={() => { setStepped(true); setStepIdx((i) => Math.min(stepList.length - 1, i + 1)); }}
                 disabled={stepIdx === stepList.length - 1}
                 style={{ border: 0, background: 'rgba(255,255,255,.7)', borderRadius: 8, width: 26, height: 26, cursor: 'pointer', fontWeight: 800, fontSize: 16 }}>›</button>
             </span>

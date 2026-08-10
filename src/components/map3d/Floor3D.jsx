@@ -121,15 +121,31 @@ function WallsMesh({ walls }) {
 // Computed route as a tube floating just above the floor, with an origin sphere
 // and a destination pin. Node positions come from mpm.graph; a plan point (x,y)
 // maps to inner-group local (x, height, -y) — same convention as the walls.
-function RouteMesh({ graph, routePath }) {
-  const { curve, o, d, heading } = useMemo(() => {
+function RouteMesh({ graph, routePath, focusT }) {
+  const { curve, d } = useMemo(() => {
     const pos = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n.position]));
     const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
     if (pts.length < 2) return { curve: null };
     const vs = pts.map((p) => new THREE.Vector3(p.x, ROUTE_H, -p.y));
-    const dir = new THREE.Vector3().subVectors(vs[1], vs[0]);
-    return { curve: new THREE.CatmullRomCurve3(vs), o: vs[0], d: vs[vs.length - 1], heading: Math.atan2(dir.x, dir.z) };
+    return { curve: new THREE.CatmullRomCurve3(vs), d: vs[vs.length - 1] };
   }, [graph, routePath]);
+
+  const arrowRef = useRef();
+  const cur = useRef(0);
+  useEffect(() => { cur.current = 0; }, [curve]); // marker back to origin on a new route
+
+  // Walk the "you are here" arrow along the route toward the active step (focusT),
+  // easing its position + heading each frame. focusT null/0 keeps it at the origin.
+  useFrame(() => {
+    if (!curve || !arrowRef.current) return;
+    const target = focusT == null ? 0 : Math.min(1, Math.max(0, focusT));
+    cur.current += (target - cur.current) * 0.1;
+    const t = cur.current;
+    const p = curve.getPointAt(t);
+    const ahead = curve.getPointAt(Math.min(1, t + 0.01));
+    arrowRef.current.position.set(p.x, p.y + 2, p.z);
+    arrowRef.current.rotation.y = Math.atan2(ahead.x - p.x, ahead.z - p.z);
+  });
 
   if (!curve) return null;
   return (
@@ -138,17 +154,19 @@ function RouteMesh({ graph, routePath }) {
         <tubeGeometry args={[curve, Math.max(32, routePath.length * 6), ROUTE_R, 10, false]} />
         <meshStandardMaterial color="#e8590c" emissive="#e8590c" emissiveIntensity={0.85} roughness={0.5} toneMapped={false} />
       </mesh>
-      {/* "You are here" — a soft halo + a heading arrow aimed down the path. */}
-      <mesh position={[o.x, o.y - 1, o.z]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[34, 40]} />
-        <meshBasicMaterial color="#2563eb" transparent opacity={0.16} />
-      </mesh>
-      <group position={[o.x, o.y + 2, o.z]} rotation={[0, heading, 0]}>
+
+      {/* "You are here" — soft halo + heading arrow that walks the route to the active step. */}
+      <group ref={arrowRef}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -3, 0]}>
+          <circleGeometry args={[34, 40]} />
+          <meshBasicMaterial color="#2563eb" transparent opacity={0.16} />
+        </mesh>
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <coneGeometry args={[24, 52, 4]} />
           <meshStandardMaterial color="#2563eb" emissive="#2563eb" emissiveIntensity={0.55} roughness={0.4} toneMapped={false} />
         </mesh>
       </group>
+
       <mesh position={[d.x, d.y + ROUTE_R * 3, d.z]}>
         <coneGeometry args={[ROUTE_R * 2, ROUTE_R * 5, 24]} />
         <meshStandardMaterial color="#aa3bff" emissive="#aa3bff" emissiveIntensity={0.6} toneMapped={false} />
@@ -196,7 +214,7 @@ function Labels({ mpm }) {
   });
 }
 
-function FloorModel({ mpm, routePath }) {
+function FloorModel({ mpm, routePath, focusT }) {
   const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
   const rooms = (mpm && mpm.rooms) || [];
   const walls = (mpm && mpm.walls) || [];
@@ -243,7 +261,7 @@ function FloorModel({ mpm, routePath }) {
             : <RoomPatch key={r.id} polygon={r.polygon} color={color} opacity={dim ? 0.5 : 1} />;
         })}
         {!roomBased && <WallsMesh walls={walls} />}
-        <RouteMesh graph={graph} routePath={routePath} />
+        <RouteMesh graph={graph} routePath={routePath} focusT={focusT} />
         <Labels mpm={mpm} />
       </group>
     </group>
@@ -254,30 +272,50 @@ function FloorModel({ mpm, routePath }) {
 // whole path, then hands control back. No loop, no auto-spin (per design principles).
 // worldPts are the route points already in world space. Mirrors Scene3D's pattern:
 // OrbitControls is disabled while gliding so it doesn't fight the eased motion.
-function RouteReveal({ controlsRef, worldPts, distRange, onStart, onEnd }) {
+// Camera controller: on a new route, one eased glide to frame the whole path; on a
+// step change (focusT), an overview-follow that eases to center on that turn point.
+// OrbitControls is disabled while easing (via onStart/onEnd) so it doesn't fight.
+function RouteCam({ controlsRef, worldPts, focusT, distRange, onStart, onEnd }) {
   const { camera } = useThree();
+  const curve = useMemo(
+    () => (worldPts && worldPts.length > 1 ? new THREE.CatmullRomCurve3(worldPts) : null),
+    [worldPts]
+  );
+  const dir = useMemo(() => new THREE.Vector3(0.35, 1.0, 0.78).normalize(), []);
   const anim = useRef(null);
+  const lastFocus = useRef(null);
 
-  useEffect(() => {
-    if (!worldPts || worldPts.length < 2) return;
-    const center = worldPts.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / worldPts.length);
-    const span = new THREE.Box3().setFromPoints(worldPts).getSize(new THREE.Vector3()).length() || 4;
-    const dir = new THREE.Vector3(0.35, 1.0, 0.78).normalize();
-    const dist = Math.min(Math.max(span * 1.8, distRange[0]), distRange[1]);
+  function glideTo(center, dist) {
     anim.current = {
       t: 0,
       fromPos: camera.position.clone(),
       fromTarget: controlsRef.current ? controlsRef.current.target.clone() : new THREE.Vector3(),
-      toPos: center.clone().add(dir.multiplyScalar(dist)),
-      toTarget: center,
+      toPos: center.clone().add(dir.clone().multiplyScalar(dist)),
+      toTarget: center.clone(),
     };
     onStart && onStart();
+  }
+
+  // New route → frame the whole path.
+  useEffect(() => {
+    lastFocus.current = null;
+    if (!worldPts || worldPts.length < 2) { anim.current = null; return; }
+    const box = new THREE.Box3().setFromPoints(worldPts);
+    const span = box.getSize(new THREE.Vector3()).length() || 4;
+    glideTo(box.getCenter(new THREE.Vector3()), Math.min(Math.max(span * 1.8, distRange[0]), distRange[1]));
   }, [worldPts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Step change → overview-follow to that point (closer framing).
+  useEffect(() => {
+    if (!curve || focusT == null || lastFocus.current === focusT) return;
+    lastFocus.current = focusT;
+    glideTo(curve.getPointAt(Math.min(1, Math.max(0, focusT))), distRange[0] * 1.25);
+  }, [focusT, curve]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useFrame((_, delta) => {
     const a = anim.current;
     if (!a) return;
-    a.t = Math.min(1, a.t + delta / 2.2); // ~2.2s reveal
+    a.t = Math.min(1, a.t + delta / 1.8);
     const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 2) / 2; // easeInOutQuad
     camera.position.lerpVectors(a.fromPos, a.toPos, e);
     const tgt = new THREE.Vector3().lerpVectors(a.fromTarget, a.toTarget, e);
@@ -293,7 +331,7 @@ function RouteReveal({ controlsRef, worldPts, distRange, onStart, onEnd }) {
   return null;
 }
 
-function Floor3D({ mpm, routePath = [] }) {
+function Floor3D({ mpm, routePath = [], focusT = null }) {
   const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
   const span = cs ? Math.max(cs.maxX - cs.minX, cs.maxY - cs.minY) * S : 45;
   const d = span * 0.95;
@@ -330,11 +368,11 @@ function Floor3D({ mpm, routePath = [] }) {
       />
       <hemisphereLight args={['#ffffff', '#c4cdd8', 0.45]} />
 
-      <FloorModel mpm={mpm} routePath={routePath} />
+      <FloorModel mpm={mpm} routePath={routePath} focusT={focusT} />
 
       <ContactShadows position={[0, -0.98, 0]} opacity={0.4} scale={span * 1.6} blur={2.6} far={span} resolution={1024} color="#26313d" />
 
-      <RouteReveal controlsRef={controlsRef} worldPts={worldRoute}
+      <RouteCam controlsRef={controlsRef} worldPts={worldRoute} focusT={focusT}
         distRange={[d * 0.4, d * 2.2]} onStart={() => setGliding(true)} onEnd={() => setGliding(false)} />
 
       <OrbitControls ref={controlsRef} makeDefault enabled={!gliding}
