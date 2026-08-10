@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { useMemo, useRef, useEffect, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, Html } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -230,10 +230,67 @@ function FloorModel({ mpm, routePath }) {
   );
 }
 
+// One orchestrated camera glide on route reveal: eases the view once to frame the
+// whole path, then hands control back. No loop, no auto-spin (per design principles).
+// worldPts are the route points already in world space. Mirrors Scene3D's pattern:
+// OrbitControls is disabled while gliding so it doesn't fight the eased motion.
+function RouteReveal({ controlsRef, worldPts, distRange, onStart, onEnd }) {
+  const { camera } = useThree();
+  const anim = useRef(null);
+
+  useEffect(() => {
+    if (!worldPts || worldPts.length < 2) return;
+    const center = worldPts.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / worldPts.length);
+    const span = new THREE.Box3().setFromPoints(worldPts).getSize(new THREE.Vector3()).length() || 4;
+    const dir = new THREE.Vector3(0.35, 1.0, 0.78).normalize();
+    const dist = Math.min(Math.max(span * 1.8, distRange[0]), distRange[1]);
+    anim.current = {
+      t: 0,
+      fromPos: camera.position.clone(),
+      fromTarget: controlsRef.current ? controlsRef.current.target.clone() : new THREE.Vector3(),
+      toPos: center.clone().add(dir.multiplyScalar(dist)),
+      toTarget: center,
+    };
+    onStart && onStart();
+  }, [worldPts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useFrame((_, delta) => {
+    const a = anim.current;
+    if (!a) return;
+    a.t = Math.min(1, a.t + delta / 2.2); // ~2.2s reveal
+    const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 2) / 2; // easeInOutQuad
+    camera.position.lerpVectors(a.fromPos, a.toPos, e);
+    const tgt = new THREE.Vector3().lerpVectors(a.fromTarget, a.toTarget, e);
+    camera.lookAt(tgt);
+    if (controlsRef.current) controlsRef.current.target.copy(tgt);
+    if (a.t >= 1) {
+      anim.current = null;
+      if (controlsRef.current) controlsRef.current.update();
+      onEnd && onEnd();
+    }
+  });
+
+  return null;
+}
+
 function Floor3D({ mpm, routePath = [] }) {
   const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
   const span = cs ? Math.max(cs.maxX - cs.minX, cs.maxY - cs.minY) * S : 45;
   const d = span * 0.95;
+  const cx = cs ? (cs.minX + cs.maxX) / 2 : 0;
+  const cy = cs ? (cs.minY + cs.maxY) / 2 : 0;
+  const controlsRef = useRef();
+  const [gliding, setGliding] = useState(false);
+
+  // Route points in WORLD space (matching FloorModel's group scale S + centering),
+  // recomputed only when the route changes — drives the reveal glide.
+  const worldRoute = useMemo(() => {
+    if (!cs) return null;
+    const pos = new Map(((mpm && mpm.graph && mpm.graph.nodes) || []).map((n) => [n.id, n.position]));
+    const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
+    if (pts.length < 2) return null;
+    return pts.map((p) => new THREE.Vector3((p.x - cx) * S, ROUTE_H * S, (cy - p.y) * S));
+  }, [mpm, routePath, cx, cy, cs]);
 
   return (
     <Canvas shadows dpr={[1, 2]}
@@ -257,11 +314,13 @@ function Floor3D({ mpm, routePath = [] }) {
 
       <ContactShadows position={[0, -0.98, 0]} opacity={0.4} scale={span * 1.6} blur={2.6} far={span} resolution={1024} color="#26313d" />
 
-      <OrbitControls
+      <RouteReveal controlsRef={controlsRef} worldPts={worldRoute}
+        distRange={[d * 0.4, d * 2.2]} onStart={() => setGliding(true)} onEnd={() => setGliding(false)} />
+
+      <OrbitControls ref={controlsRef} makeDefault enabled={!gliding}
         enableDamping dampingFactor={0.08}
         minPolarAngle={0.15} maxPolarAngle={1.4}
         minDistance={d * 0.35} maxDistance={d * 2.4}
-        target={[0, 0, 0]}
       />
     </Canvas>
   );
