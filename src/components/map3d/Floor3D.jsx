@@ -122,12 +122,13 @@ function WallsMesh({ walls }) {
 // and a destination pin. Node positions come from mpm.graph; a plan point (x,y)
 // maps to inner-group local (x, height, -y) — same convention as the walls.
 function RouteMesh({ graph, routePath }) {
-  const { curve, o, d } = useMemo(() => {
+  const { curve, o, d, heading } = useMemo(() => {
     const pos = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n.position]));
     const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
     if (pts.length < 2) return { curve: null };
     const vs = pts.map((p) => new THREE.Vector3(p.x, ROUTE_H, -p.y));
-    return { curve: new THREE.CatmullRomCurve3(vs), o: vs[0], d: vs[vs.length - 1] };
+    const dir = new THREE.Vector3().subVectors(vs[1], vs[0]);
+    return { curve: new THREE.CatmullRomCurve3(vs), o: vs[0], d: vs[vs.length - 1], heading: Math.atan2(dir.x, dir.z) };
   }, [graph, routePath]);
 
   if (!curve) return null;
@@ -137,10 +138,17 @@ function RouteMesh({ graph, routePath }) {
         <tubeGeometry args={[curve, Math.max(32, routePath.length * 6), ROUTE_R, 10, false]} />
         <meshStandardMaterial color="#e8590c" emissive="#e8590c" emissiveIntensity={0.85} roughness={0.5} toneMapped={false} />
       </mesh>
-      <mesh position={o}>
-        <sphereGeometry args={[ROUTE_R * 2, 24, 24]} />
-        <meshStandardMaterial color="#2563eb" emissive="#2563eb" emissiveIntensity={0.5} toneMapped={false} />
+      {/* "You are here" — a soft halo + a heading arrow aimed down the path. */}
+      <mesh position={[o.x, o.y - 1, o.z]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[34, 40]} />
+        <meshBasicMaterial color="#2563eb" transparent opacity={0.16} />
       </mesh>
+      <group position={[o.x, o.y + 2, o.z]} rotation={[0, heading, 0]}>
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[24, 52, 4]} />
+          <meshStandardMaterial color="#2563eb" emissive="#2563eb" emissiveIntensity={0.55} roughness={0.4} toneMapped={false} />
+        </mesh>
+      </group>
       <mesh position={[d.x, d.y + ROUTE_R * 3, d.z]}>
         <coneGeometry args={[ROUTE_R * 2, ROUTE_R * 5, 24]} />
         <meshStandardMaterial color="#aa3bff" emissive="#aa3bff" emissiveIntensity={0.6} toneMapped={false} />
