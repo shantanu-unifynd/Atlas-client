@@ -114,9 +114,9 @@ function RouteMesh({ graph, routePath }) {
   );
 }
 
-// Room labels as billboarded HTML sprites floating above the walls. Labels whose
-// room has a real polygon read as primary (bolder); point-fallback labels are
-// smaller and muted — mirrors the 2D LabelsLayer hierarchy.
+// Room labels as billboarded HTML sprites floating above the walls. To avoid a
+// jumble, only labels whose room has a real polygon footprint are shown — the
+// point-fallback rooms (no traced footprint yet) would just clutter the view.
 function Labels({ mpm }) {
   const labels = (mpm && mpm.labels) || [];
   const roomsById = useMemo(
@@ -126,13 +126,13 @@ function Labels({ mpm }) {
   return labels.map((l) => {
     if (!l.position || !Number.isFinite(l.position.x)) return null;
     const room = roomsById.get(l.roomId);
-    const primary = Boolean(room && room.polygon);
+    if (!room || !room.polygon) return null; // hide point-fallback labels
     return (
       <Html key={l.id} position={[l.position.x, LABEL_H, -l.position.y]} center sprite zIndexRange={[10, 0]}
         style={{
           pointerEvents: 'none', whiteSpace: 'nowrap', userSelect: 'none',
-          fontFamily: 'system-ui, sans-serif', fontWeight: primary ? 600 : 400,
-          fontSize: primary ? 13 : 11, color: '#1f2a37', opacity: primary ? 1 : 0.72,
+          fontFamily: 'system-ui, sans-serif', fontWeight: 600,
+          fontSize: 13, color: '#1f2a37',
           textShadow: '0 0 3px #fff, 0 1px 2px #fff, 0 -1px 2px #fff',
         }}>
         {l.text}
