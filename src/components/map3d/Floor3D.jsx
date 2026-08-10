@@ -156,6 +156,14 @@ function FloorModel({ mpm, routePath }) {
     (r) => r.polygon && r.polygon.length >= 3 && r.polygon.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
   );
 
+  // Vertical geometry is adaptive: raise the floor's own walls when it has them
+  // (wall-based floors like Phoenix). Otherwise raise each room's outline into
+  // thin walls so room-based floors (e.g. August) still stand up as real rooms —
+  // a room's polygon boundary is effectively its walls.
+  const wallLines = walls.length
+    ? walls
+    : polyRooms.map((r) => ({ id: `outline-${r.id}`, polyline: [...r.polygon, r.polygon[0]] }));
+
   return (
     <group scale={[S, S, S]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -1, 0]} receiveShadow>
@@ -166,7 +174,7 @@ function FloorModel({ mpm, routePath }) {
         {polyRooms.map((r) => (
           <RoomPatch key={r.id} polygon={r.polygon} color={r.source === 'MANUAL' ? '#DCE8FB' : '#F4F7FA'} />
         ))}
-        <WallsMesh walls={walls} />
+        <WallsMesh walls={wallLines} />
         <RouteMesh graph={graph} routePath={routePath} />
         <Labels mpm={mpm} />
       </group>
