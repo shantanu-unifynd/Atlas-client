@@ -14,8 +14,7 @@ const WALL_H = 150;    // wall extrusion height (plan px) — short Mappedin-sty
 const WALL_T = 16;     // wall thickness (plan px)
 const S = 0.02;        // world scale (bounds ~2245px -> ~45 world units)
 const FLOOR_LIFT = 1;  // plan px the room patches sit above the plate (avoid z-fight)
-const ROUTE_H = 10;    // plan px the route line floats above the floor
-const ROUTE_R = 7;     // route tube radius (plan px)
+const ROUTE_H = 10;    // plan px the route ribbon floats above the floor
 const LABEL_H = WALL_H + 45; // plan px — labels float above the walls
 
 // Soft mall palette by shop category (Woosmap-style calm fills). Falls back to a
@@ -121,13 +120,45 @@ function WallsMesh({ walls }) {
 // Computed route as a tube floating just above the floor, with an origin sphere
 // and a destination pin. Node positions come from mpm.graph; a plan point (x,y)
 // maps to inner-group local (x, height, -y) — same convention as the walls.
+// Flat ribbon along a sampled curve: for each point, offset ±width/2 along the
+// XZ normal and stitch a triangle strip — a flat line lying on the floor.
+function ribbonGeometry(points, width) {
+  const half = width / 2, pos = [], idx = [];
+  for (let i = 0; i < points.length; i += 1) {
+    const p = points[i];
+    const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
+    let tx = b.x - a.x, tz = b.z - a.z;
+    const len = Math.hypot(tx, tz) || 1; tx /= len; tz /= len;
+    pos.push(p.x - tz * half, p.y, p.z + tx * half, p.x + tz * half, p.y, p.z - tx * half);
+  }
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = i * 2;
+    idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+
+// Flat chevron arrowhead lying in the XZ plane, pointing +Z (aimed via group.rotation.y).
+function arrowGeometry() {
+  const L = 54, W = 34, B = 16;
+  const pos = [0, 0, L, W, 0, -B, 0, 0, 0, 0, 0, L, 0, 0, 0, -W, 0, -B];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
 function RouteMesh({ graph, routePath, focusT }) {
-  const { curve, d } = useMemo(() => {
+  const { curve, ribbonGeo, arrowGeo, d } = useMemo(() => {
     const pos = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n.position]));
     const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
     if (pts.length < 2) return { curve: null };
     const vs = pts.map((p) => new THREE.Vector3(p.x, ROUTE_H, -p.y));
-    return { curve: new THREE.CatmullRomCurve3(vs), d: vs[vs.length - 1] };
+    const c = new THREE.CatmullRomCurve3(vs);
+    return { curve: c, ribbonGeo: ribbonGeometry(c.getPoints(96), 18), arrowGeo: arrowGeometry(), d: vs[vs.length - 1] };
   }, [graph, routePath]);
 
   const arrowRef = useRef();
@@ -150,26 +181,26 @@ function RouteMesh({ graph, routePath, focusT }) {
   if (!curve) return null;
   return (
     <group>
-      <mesh castShadow>
-        <tubeGeometry args={[curve, Math.max(32, routePath.length * 6), ROUTE_R, 10, false]} />
-        <meshStandardMaterial color="#e8590c" emissive="#e8590c" emissiveIntensity={0.85} roughness={0.5} toneMapped={false} />
+      {/* Flat blue navigation ribbon on the floor. */}
+      <mesh geometry={ribbonGeo}>
+        <meshBasicMaterial color="#3b82f6" toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
 
-      {/* "You are here" — soft halo + heading arrow that walks the route to the active step. */}
+      {/* "You are here" — soft halo + a flat heading chevron that walks the route. */}
       <group ref={arrowRef}>
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -3, 0]}>
           <circleGeometry args={[34, 40]} />
           <meshBasicMaterial color="#2563eb" transparent opacity={0.16} />
         </mesh>
-        <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <coneGeometry args={[24, 52, 4]} />
-          <meshStandardMaterial color="#2563eb" emissive="#2563eb" emissiveIntensity={0.55} roughness={0.4} toneMapped={false} />
+        <mesh geometry={arrowGeo}>
+          <meshBasicMaterial color="#2563eb" toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
       </group>
 
-      <mesh position={[d.x, d.y + ROUTE_R * 3, d.z]}>
-        <coneGeometry args={[ROUTE_R * 2, ROUTE_R * 5, 24]} />
-        <meshStandardMaterial color="#aa3bff" emissive="#aa3bff" emissiveIntensity={0.6} toneMapped={false} />
+      {/* Flat destination disc. */}
+      <mesh position={[d.x, d.y - 1, d.z]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[26, 40]} />
+        <meshBasicMaterial color="#7c3aed" toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
     </group>
   );
