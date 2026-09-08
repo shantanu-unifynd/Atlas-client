@@ -1,251 +1,146 @@
-import { useMemo, useRef, useEffect, useState } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, ContactShadows, Html } from '@react-three/drei';
+import { useMemo } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, ContactShadows, Bounds, Text, Billboard } from '@react-three/drei';
 import * as THREE from 'three';
 
-// Milestone 2 — 2.5D floor renderer (Mappedin-style).
-// Rooms render as flat colored floor patches; the MPM *walls* are the vertical
-// geometry — each wall polyline is thickened into a ribbon and extruded upward,
-// so the 284 wall primitives become the room dividers you actually walk between.
-// All geometry lives in plan (x,y) space, extruded along +z, then rotated so the
-// plan lies on the world XZ ground plane and the extrusion becomes height. M2+.
+// Milestone 1 + M2 overlays — 2.5D extruded floor renderer.
+// Rooms = extruded polygons; walls = thin slabs; auto-fit camera via <Bounds>.
+// Overlays (render only when the data exists): room labels, route ribbon on the
+// floor, directional chevrons, and an origin/location marker.
 
-const WALL_H = 150;    // wall extrusion height (plan px) — short Mappedin-style walls
-const WALL_T = 16;     // wall thickness (plan px)
-const S = 0.02;        // world scale (bounds ~2245px -> ~45 world units)
-const FLOOR_LIFT = 1;  // plan px the room patches sit above the plate (avoid z-fight)
-const ROUTE_H = 10;    // plan px the route ribbon floats above the floor
-const LABEL_H = WALL_H + 45; // plan px — labels float above the walls
+const WALL_H = 150;
+const S = 0.02;
+const INSET = 0.9;
+const WALL_THICK = 7;
+const ROUTE = '#2563eb';
 
-// Soft mall palette by shop category (Woosmap-style calm fills). Falls back to a
-// neutral tint for uncategorised rooms.
-const PALETTE = {
-  FASHION: '#F6D9E3', FOOTWEAR: '#F4E2C9', ELECTRONICS: '#D6E4F5', JEWELRY: '#E7DCF7',
-  ACCESSORIES: '#FCE7C8', BEAUTY: '#F7D9D9', 'F&B': '#FBE6B8', LIFESTYLE: '#D9EFE4',
-  DEPARTMENT: '#DCE8FB', ENTERTAINMENT: '#E5DAF0',
-};
-function roomColor(r) {
-  return PALETTE[(r.category || '').toUpperCase()] || (r.source === 'MANUAL' ? '#DCE8FB' : '#EEF2F6');
-}
-
-// Flat filled polygon laid on the ground for a room footprint. `opacity` < 1 dims
-// it (used to fade non-route shops so the active path reads clearly).
-function RoomPatch({ polygon, color, opacity = 1 }) {
-  const geometry = useMemo(() => {
-    const shape = new THREE.Shape();
-    polygon.forEach((p, i) => (i ? shape.lineTo(p.x, p.y) : shape.moveTo(p.x, p.y)));
-    const geo = new THREE.ShapeGeometry(shape);
-    geo.rotateX(-Math.PI / 2);
-    geo.translate(0, FLOOR_LIFT, 0);
-    return geo;
-  }, [polygon]);
-
-  return (
-    <mesh geometry={geometry} receiveShadow>
-      <meshStandardMaterial color={color} roughness={1} metalness={0} transparent={opacity < 1} opacity={opacity} />
-    </mesh>
-  );
-}
-
-// Solid extruded shop block for a room-based floor: the whole footprint is raised
-// into a colored volume with edge outlines. `opacity` < 1 fades off-route shops.
-function RoomBlock({ polygon, color, opacity = 1 }) {
+function RoomMesh({ polygon, color }) {
   const { geometry, edges } = useMemo(() => {
+    const cx = polygon.reduce((s, p) => s + p.x, 0) / polygon.length;
+    const cy = polygon.reduce((s, p) => s + p.y, 0) / polygon.length;
+    const pts = polygon.map((p) => ({ x: cx + (p.x - cx) * INSET, y: cy + (p.y - cy) * INSET }));
     const shape = new THREE.Shape();
-    polygon.forEach((p, i) => (i ? shape.lineTo(p.x, p.y) : shape.moveTo(p.x, p.y)));
+    pts.forEach((p, i) => (i ? shape.lineTo(p.x, p.y) : shape.moveTo(p.x, p.y)));
     const geo = new THREE.ExtrudeGeometry(shape, { depth: WALL_H, bevelEnabled: false });
     geo.rotateX(-Math.PI / 2);
     return { geometry: geo, edges: new THREE.EdgesGeometry(geo, 20) };
   }, [polygon]);
-
   return (
     <group>
       <mesh geometry={geometry} castShadow receiveShadow>
-        <meshStandardMaterial color={color} roughness={0.9} metalness={0} transparent={opacity < 1} opacity={opacity} />
+        <meshStandardMaterial color={color} roughness={0.92} metalness={0} />
       </mesh>
       <lineSegments geometry={edges}>
-        <lineBasicMaterial color="#8A94A0" transparent opacity={opacity < 1 ? 0.35 : 0.85} />
+        <lineBasicMaterial color="#68727E" />
       </lineSegments>
     </group>
   );
 }
 
-// Rectangle (4 plan-space corners) for one polyline segment a->b, thickness t.
-function segRect(a, b, t) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const nx = (-dy / len) * (t / 2);
-  const ny = (dx / len) * (t / 2);
-  return [
-    { x: a.x + nx, y: a.y + ny },
-    { x: b.x + nx, y: b.y + ny },
-    { x: b.x - nx, y: b.y - ny },
-    { x: a.x - nx, y: a.y - ny },
-  ];
-}
-
-// All walls in one merged geometry: every segment of every polyline becomes a
-// thickened rectangle, and ExtrudeGeometry accepts the whole shape array at once.
-function WallsMesh({ walls }) {
-  const { geometry, edges } = useMemo(() => {
-    const shapes = [];
-    walls.forEach((w) => {
-      const pl = (w.polyline || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-      for (let i = 0; i < pl.length - 1; i++) {
-        const r = segRect(pl[i], pl[i + 1], WALL_T);
-        const s = new THREE.Shape();
-        r.forEach((p, k) => (k ? s.lineTo(p.x, p.y) : s.moveTo(p.x, p.y)));
-        shapes.push(s);
+function Walls({ walls }) {
+  const segs = useMemo(() => {
+    const out = [];
+    (walls || []).forEach((w, wi) => {
+      const pl = w.polyline || [];
+      for (let i = 0; i < pl.length - 1; i += 1) {
+        const a = pl[i];
+        const b = pl[i + 1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        out.push({ key: `${wi}-${i}`, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, len, angle: Math.atan2(dy, dx) });
       }
     });
-    if (!shapes.length) return { geometry: null, edges: null };
-    const geo = new THREE.ExtrudeGeometry(shapes, { depth: WALL_H, bevelEnabled: false });
-    geo.rotateX(-Math.PI / 2);
-    return { geometry: geo, edges: new THREE.EdgesGeometry(geo, 30) };
+    return out;
   }, [walls]);
+  const H = WALL_H * 1.05;
+  return segs.map((s) => (
+    <mesh key={s.key} position={[s.cx, H / 2, -s.cy]} rotation={[0, s.angle, 0]} castShadow>
+      <boxGeometry args={[s.len, H, WALL_THICK]} />
+      <meshStandardMaterial color="#B9C0C8" roughness={0.95} />
+    </mesh>
+  ));
+}
 
-  if (!geometry) return null;
-  return (
-    <group>
-      <mesh geometry={geometry} castShadow receiveShadow>
-        <meshStandardMaterial color="#C9D2DC" roughness={0.95} metalness={0} />
-      </mesh>
-      <lineSegments geometry={edges}>
-        <lineBasicMaterial color="#5B6570" />
-      </lineSegments>
-    </group>
+// Billboarded room labels — floats each named room's name above the unit.
+function RoomLabels({ rooms }) {
+  const named = useMemo(
+    () => (rooms || []).filter((r) => r.name && r.centroid && Number.isFinite(r.centroid.x)),
+    [rooms]
   );
+  return named.map((r) => (
+    <Billboard key={r.id} position={[r.centroid.x, WALL_H * 1.35, -r.centroid.y]}>
+      <Text fontSize={72} color="#1d2733" anchorX="center" anchorY="middle" outlineWidth={7} outlineColor="#ffffff">
+        {r.name}
+      </Text>
+    </Billboard>
+  ));
 }
 
-// Computed route as a tube floating just above the floor, with an origin sphere
-// and a destination pin. Node positions come from mpm.graph; a plan point (x,y)
-// maps to inner-group local (x, height, -y) — same convention as the walls.
-// Flat ribbon along a sampled curve: for each point, offset ±width/2 along the
-// XZ normal and stitch a triangle strip — a flat line lying on the floor.
-function ribbonGeometry(points, width) {
-  const half = width / 2, pos = [], idx = [];
-  for (let i = 0; i < points.length; i += 1) {
-    const p = points[i];
-    const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
-    let tx = b.x - a.x, tz = b.z - a.z;
-    const len = Math.hypot(tx, tz) || 1; tx /= len; tz /= len;
-    pos.push(p.x - tz * half, p.y, p.z + tx * half, p.x + tz * half, p.y, p.z - tx * half);
-  }
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const a = i * 2;
-    idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx); g.computeVertexNormals();
-  return g;
-}
+// Route ribbon on the floor + directional chevrons + origin marker.
+function Route({ routePath, graph }) {
+  const chevronShape = useMemo(() => {
+    const s = new THREE.Shape();
+    s.moveTo(34, 0);
+    s.lineTo(-16, 22);
+    s.lineTo(-16, -22);
+    s.closePath();
+    return s;
+  }, []);
 
-// Flat chevron arrowhead lying in the XZ plane, pointing +Z (aimed via group.rotation.y).
-function arrowGeometry() {
-  const L = 54, W = 34, B = 16;
-  const pos = [0, 0, L, W, 0, -B, 0, 0, 0, 0, 0, L, 0, 0, 0, -W, 0, -B];
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return g;
-}
+  const data = useMemo(() => {
+    if (!routePath || routePath.length < 2 || !graph) return null;
+    const byId = new Map((graph.nodes || []).map((n) => [n.id, n.position]));
+    const pts = routePath.map((id) => byId.get(id)).filter((p) => p && Number.isFinite(p.x));
+    if (pts.length < 2) return null;
+    const H = WALL_H * 0.16;
+    const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(p.x, H, -p.y)));
+    const tube = new THREE.TubeGeometry(curve, Math.max(pts.length * 8, 24), 16, 8, false);
+    const chevrons = [];
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      chevrons.push({ key: i, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, angle: Math.atan2(b.y - a.y, b.x - a.x) });
+    }
+    return { tube, chevrons, origin: pts[0], H };
+  }, [routePath, graph]);
 
-function RouteMesh({ graph, routePath, focusT }) {
-  const { curve, ribbonGeo, arrowGeo, d } = useMemo(() => {
-    const pos = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n.position]));
-    const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
-    if (pts.length < 2) return { curve: null };
-    const vs = pts.map((p) => new THREE.Vector3(p.x, ROUTE_H, -p.y));
-    const c = new THREE.CatmullRomCurve3(vs);
-    return { curve: c, ribbonGeo: ribbonGeometry(c.getPoints(96), 18), arrowGeo: arrowGeometry(), d: vs[vs.length - 1] };
-  }, [graph, routePath]);
-
-  const arrowRef = useRef();
-  const cur = useRef(0);
-  useEffect(() => { cur.current = 0; }, [curve]); // marker back to origin on a new route
-
-  // Walk the "you are here" arrow along the route toward the active step (focusT),
-  // easing its position + heading each frame. focusT null/0 keeps it at the origin.
-  useFrame(() => {
-    if (!curve || !arrowRef.current) return;
-    const target = focusT == null ? 0 : Math.min(1, Math.max(0, focusT));
-    cur.current += (target - cur.current) * 0.1;
-    const t = cur.current;
-    const p = curve.getPointAt(t);
-    const ahead = curve.getPointAt(Math.min(1, t + 0.01));
-    arrowRef.current.position.set(p.x, p.y + 2, p.z);
-    arrowRef.current.rotation.y = Math.atan2(ahead.x - p.x, ahead.z - p.z);
-  });
-
-  if (!curve) return null;
+  if (!data) return null;
+  const { tube, chevrons, origin, H } = data;
   return (
     <group>
-      {/* Flat blue navigation ribbon on the floor. */}
-      <mesh geometry={ribbonGeo}>
-        <meshBasicMaterial color="#3b82f6" toneMapped={false} side={THREE.DoubleSide} />
+      <mesh geometry={tube}>
+        <meshStandardMaterial color={ROUTE} emissive={ROUTE} emissiveIntensity={0.35} roughness={0.5} />
       </mesh>
-
-      {/* "You are here" — soft halo + a flat heading chevron that walks the route. */}
-      <group ref={arrowRef}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -3, 0]}>
-          <circleGeometry args={[34, 40]} />
-          <meshBasicMaterial color="#2563eb" transparent opacity={0.16} />
+      {chevrons.map((c) => (
+        <group key={c.key} position={[c.x, H + 6, -c.y]} rotation={[0, c.angle, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]}>
+            <shapeGeometry args={[chevronShape]} />
+            <meshBasicMaterial color="#ffffff" side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      ))}
+      {/* origin / location marker */}
+      <group position={[origin.x, 0, -origin.y]}>
+        <mesh position={[0, H + 70, 0]}>
+          <cylinderGeometry args={[7, 7, 140, 12]} />
+          <meshStandardMaterial color={ROUTE} />
         </mesh>
-        <mesh geometry={arrowGeo}>
-          <meshBasicMaterial color="#2563eb" toneMapped={false} side={THREE.DoubleSide} />
+        <mesh position={[0, H + 150, 0]}>
+          <sphereGeometry args={[28, 18, 18]} />
+          <meshStandardMaterial color={ROUTE} emissive={ROUTE} emissiveIntensity={0.3} />
+        </mesh>
+        <mesh position={[0, H + 4, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[34, 46, 24]} />
+          <meshBasicMaterial color={ROUTE} side={THREE.DoubleSide} transparent opacity={0.6} />
         </mesh>
       </group>
-
-      {/* Flat destination disc. */}
-      <mesh position={[d.x, d.y - 1, d.z]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[26, 40]} />
-        <meshBasicMaterial color="#7c3aed" toneMapped={false} side={THREE.DoubleSide} />
-      </mesh>
     </group>
   );
 }
 
-// Category → pin glyph (Woosmap-style icon markers).
-const ICONS = {
-  FASHION: '👗', FOOTWEAR: '👟', ELECTRONICS: '📱', JEWELRY: '💎', ACCESSORIES: '🕶️',
-  BEAUTY: '💄', 'F&B': '☕', LIFESTYLE: '🛍️', DEPARTMENT: '🏬', ENTERTAINMENT: '🎬',
-};
-
-// Shop markers as billboarded HTML pins floating above the blocks: a circular
-// icon badge (by category) with the shop name beneath. Only rooms with a real
-// polygon footprint get a pin, to avoid a jumble.
-function Labels({ mpm }) {
-  const labels = (mpm && mpm.labels) || [];
-  const roomsById = useMemo(
-    () => new Map(((mpm && mpm.rooms) || []).map((r) => [r.id, r])),
-    [mpm]
-  );
-  return labels.map((l) => {
-    if (!l.position || !Number.isFinite(l.position.x)) return null;
-    const room = roomsById.get(l.roomId);
-    if (!room || !room.polygon) return null; // hide point-fallback labels
-    const icon = ICONS[(room.category || '').toUpperCase()] || '📍';
-    return (
-      <Html key={l.id} position={[l.position.x, LABEL_H, -l.position.y]} center sprite zIndexRange={[10, 0]}
-        style={{ pointerEvents: 'none', userSelect: 'none' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-40%)' }}>
-          <div style={{
-            width: 26, height: 26, borderRadius: '50%', background: '#fff',
-            border: '2px solid #e8590c', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 14, lineHeight: 1, boxShadow: '0 2px 6px rgba(20,35,45,.28)',
-          }}>{icon}</div>
-          <div style={{
-            marginTop: 3, fontFamily: 'system-ui, sans-serif', fontWeight: 600, fontSize: 12,
-            color: '#1f2a37', whiteSpace: 'nowrap', textShadow: '0 0 3px #fff, 0 1px 2px #fff, 0 -1px 2px #fff',
-          }}>{l.text}</div>
-        </div>
-      </Html>
-    );
-  });
-}
-
-function FloorModel({ mpm, routePath, focusT }) {
+function FloorModel({ mpm, routePath }) {
   const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
   const rooms = (mpm && mpm.rooms) || [];
   const walls = (mpm && mpm.walls) || [];
@@ -260,157 +155,46 @@ function FloorModel({ mpm, routePath, focusT }) {
     (r) => r.polygon && r.polygon.length >= 3 && r.polygon.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
   );
 
-  // Vertical geometry is adaptive: raise the floor's own walls when it has them
-  // (wall-based floors like Phoenix). Otherwise raise each room's outline into
-  // thin walls so room-based floors (e.g. August) still stand up as real rooms —
-  // a room's polygon boundary is effectively its walls.
-  // Wall-based floors (real wall data, e.g. Phoenix) extrude their walls with flat
-  // room floors; room-based floors (e.g. August) raise each shop into a solid
-  // colored block instead.
-  const roomBased = !walls.length;
-
-  // Guide the eye (Woosmap-style): calm pastel shops; once a route is active, dim
-  // every shop except the origin/destination so the bright path is what stands out.
-  const nodeById = new Map(((graph && graph.nodes) || []).map((n) => [n.id, n]));
-  const routeActive = (routePath || []).length > 1;
-  const originLabel = routeActive ? (nodeById.get(routePath[0]) || {}).label : null;
-  const destLabel = routeActive ? (nodeById.get(routePath[routePath.length - 1]) || {}).label : null;
-  const isEndpoint = (r) => r.name && (r.name === originLabel || r.name === destLabel);
-
   return (
     <group scale={[S, S, S]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -1, 0]} receiveShadow>
-        <planeGeometry args={[w * 1.04, h * 1.04]} />
+        <planeGeometry args={[w * 1.15, h * 1.15]} />
         <meshStandardMaterial color="#E9ECF0" roughness={1} />
       </mesh>
       <group position={[-cx, 0, cy]}>
-        {polyRooms.map((r) => {
-          const dim = routeActive && !isEndpoint(r);
-          const color = dim ? '#C7CDD6' : roomColor(r);
-          return roomBased
-            ? <RoomBlock key={r.id} polygon={r.polygon} color={color} opacity={dim ? 0.55 : 1} />
-            : <RoomPatch key={r.id} polygon={r.polygon} color={color} opacity={dim ? 0.5 : 1} />;
-        })}
-        {!roomBased && <WallsMesh walls={walls} />}
-        <RouteMesh graph={graph} routePath={routePath} focusT={focusT} />
-        <Labels mpm={mpm} />
+        {polyRooms.map((r) => (
+          <RoomMesh key={r.id} polygon={r.polygon} color={r.source === 'MANUAL' ? '#DCE8FB' : '#FFFFFF'} />
+        ))}
+        <Walls walls={walls} />
+        <RoomLabels rooms={rooms} />
+        <Route routePath={routePath} graph={graph} />
       </group>
     </group>
   );
 }
 
-// One orchestrated camera glide on route reveal: eases the view once to frame the
-// whole path, then hands control back. No loop, no auto-spin (per design principles).
-// worldPts are the route points already in world space. Mirrors Scene3D's pattern:
-// OrbitControls is disabled while gliding so it doesn't fight the eased motion.
-// Camera controller: on a new route, one eased glide to frame the whole path; on a
-// step change (focusT), an overview-follow that eases to center on that turn point.
-// OrbitControls is disabled while easing (via onStart/onEnd) so it doesn't fight.
-function RouteCam({ controlsRef, worldPts, focusT, distRange, onStart, onEnd }) {
-  const { camera } = useThree();
-  const curve = useMemo(
-    () => (worldPts && worldPts.length > 1 ? new THREE.CatmullRomCurve3(worldPts) : null),
-    [worldPts]
-  );
-  const dir = useMemo(() => new THREE.Vector3(0.35, 1.0, 0.78).normalize(), []);
-  const anim = useRef(null);
-  const lastFocus = useRef(null);
-
-  function glideTo(center, dist) {
-    anim.current = {
-      t: 0,
-      fromPos: camera.position.clone(),
-      fromTarget: controlsRef.current ? controlsRef.current.target.clone() : new THREE.Vector3(),
-      toPos: center.clone().add(dir.clone().multiplyScalar(dist)),
-      toTarget: center.clone(),
-    };
-    onStart && onStart();
-  }
-
-  // New route → frame the whole path.
-  useEffect(() => {
-    lastFocus.current = null;
-    if (!worldPts || worldPts.length < 2) { anim.current = null; return; }
-    const box = new THREE.Box3().setFromPoints(worldPts);
-    const span = box.getSize(new THREE.Vector3()).length() || 4;
-    glideTo(box.getCenter(new THREE.Vector3()), Math.min(Math.max(span * 1.8, distRange[0]), distRange[1]));
-  }, [worldPts]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Step change → overview-follow to that point (closer framing).
-  useEffect(() => {
-    if (!curve || focusT == null || lastFocus.current === focusT) return;
-    lastFocus.current = focusT;
-    glideTo(curve.getPointAt(Math.min(1, Math.max(0, focusT))), distRange[0] * 1.25);
-  }, [focusT, curve]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useFrame((_, delta) => {
-    const a = anim.current;
-    if (!a) return;
-    a.t = Math.min(1, a.t + delta / 1.8);
-    const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 2) / 2; // easeInOutQuad
-    camera.position.lerpVectors(a.fromPos, a.toPos, e);
-    const tgt = new THREE.Vector3().lerpVectors(a.fromTarget, a.toTarget, e);
-    camera.lookAt(tgt);
-    if (controlsRef.current) controlsRef.current.target.copy(tgt);
-    if (a.t >= 1) {
-      anim.current = null;
-      if (controlsRef.current) controlsRef.current.update();
-      onEnd && onEnd();
-    }
-  });
-
-  return null;
-}
-
-function Floor3D({ mpm, routePath = [], focusT = null }) {
-  const cs = mpm && mpm.coordinateSystem && mpm.coordinateSystem.bounds;
-  const span = cs ? Math.max(cs.maxX - cs.minX, cs.maxY - cs.minY) * S : 45;
-  const d = span * 0.95;
-  const cx = cs ? (cs.minX + cs.maxX) / 2 : 0;
-  const cy = cs ? (cs.minY + cs.maxY) / 2 : 0;
-  const controlsRef = useRef();
-  const [gliding, setGliding] = useState(false);
-
-  // Route points in WORLD space (matching FloorModel's group scale S + centering),
-  // recomputed only when the route changes — drives the reveal glide.
-  const worldRoute = useMemo(() => {
-    if (!cs) return null;
-    const pos = new Map(((mpm && mpm.graph && mpm.graph.nodes) || []).map((n) => [n.id, n.position]));
-    const pts = (routePath || []).map((id) => pos.get(id)).filter((p) => p && Number.isFinite(p.x));
-    if (pts.length < 2) return null;
-    return pts.map((p) => new THREE.Vector3((p.x - cx) * S, ROUTE_H * S, (cy - p.y) * S));
-  }, [mpm, routePath, cx, cy, cs]);
-
+function Floor3D({ mpm, routePath = [] }) {
   return (
     <Canvas shadows dpr={[1, 2]}
-      camera={{ position: [span * 0.35, span * 1.1, span * 0.78], fov: 40, near: 0.1, far: 2000 }}
+      camera={{ position: [30, 44, 34], fov: 40, near: 0.1, far: 4000 }}
       style={{ width: '100%', height: '100%' }}>
       <color attach="background" args={['#EEF1F4']} />
-      <fog attach="fog" args={['#EEF1F4', span * 2.4, span * 4.2]} />
       <ambientLight intensity={0.8} />
       <directionalLight
-        position={[span * 0.6, span * 1.5, span * 0.4]}
-        intensity={1.2}
-        castShadow
+        position={[40, 90, 30]} intensity={1.2} castShadow
         shadow-mapSize={[2048, 2048]}
-        shadow-camera-left={-span} shadow-camera-right={span}
-        shadow-camera-top={span} shadow-camera-bottom={-span}
-        shadow-camera-far={span * 4}
+        shadow-camera-left={-80} shadow-camera-right={80}
+        shadow-camera-top={80} shadow-camera-bottom={-80} shadow-camera-far={400}
       />
       <hemisphereLight args={['#ffffff', '#c4cdd8', 0.45]} />
 
-      <FloorModel mpm={mpm} routePath={routePath} focusT={focusT} />
+      <Bounds fit clip observe margin={1.2}>
+        <FloorModel mpm={mpm} routePath={routePath} />
+      </Bounds>
 
-      <ContactShadows position={[0, -0.98, 0]} opacity={0.4} scale={span * 1.6} blur={2.6} far={span} resolution={1024} color="#26313d" />
+      <ContactShadows position={[0, -0.98, 0]} opacity={0.38} scale={140} blur={2.6} far={90} resolution={1024} color="#26313d" />
 
-      <RouteCam controlsRef={controlsRef} worldPts={worldRoute} focusT={focusT}
-        distRange={[d * 0.4, d * 2.2]} onStart={() => setGliding(true)} onEnd={() => setGliding(false)} />
-
-      <OrbitControls ref={controlsRef} makeDefault enabled={!gliding}
-        enableDamping dampingFactor={0.08}
-        minPolarAngle={0.15} maxPolarAngle={1.4}
-        minDistance={d * 0.35} maxDistance={d * 2.4}
-      />
+      <OrbitControls makeDefault enableDamping dampingFactor={0.08} minPolarAngle={0.15} maxPolarAngle={1.4} />
     </Canvas>
   );
 }
