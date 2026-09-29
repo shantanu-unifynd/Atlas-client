@@ -45,7 +45,7 @@ function WayfindingPage() {
   const [routeInfo, setRouteInfo] = useState(null);
   const [computing, setComputing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [view, setView] = useState('2d');
+  const [view, setView] = useState('3d');
   const [stepIdx, setStepIdx] = useState(0);
   const [stepped, setStepped] = useState(false);
 
@@ -136,6 +136,20 @@ function WayfindingPage() {
   }
   function findRoute() { computeRouteFor(originId, destId); }
 
+  // Touch-first: tapping a shop in 3D routes to it. If no origin is chosen yet we
+  // default to the West Entrance (kiosk-style "route from the door").
+  function pickRoom(room) {
+    if (!room || !room.name) return;
+    const destNode = nodes.find((n) => (n.label || '') === room.name);
+    if (!destNode) return;
+    const fallbackOrigin = nodes.find((n) => n.id === 'entrance-west') || nodes.find((n) => /entrance/i.test(n.id));
+    const oId = originId && originId !== destNode.id ? originId : fallbackOrigin?.id;
+    if (!oId || oId === destNode.id) return;
+    setOriginId(oId);
+    setDestId(destNode.id);
+    computeRouteFor(oId, destNode.id);
+  }
+
   // C3-02 — deep link: once the published MPM's nodes are available, apply the
   // initial ?from / ?to (node id or label), auto-select both, and auto-compute the
   // route — identical to manual selection. Runs once per floor load; unmatched or
@@ -217,34 +231,37 @@ function WayfindingPage() {
 
       <div className="plan-wrap">
         {view === '3d'
-          ? <Floor3D mpm={load.mpm} routePath={routePath} focusT={stepped ? (stepList[stepIdx]?.t ?? null) : null} />
+          ? <Floor3D mpm={load.mpm} routePath={routePath} focusT={stepped ? (stepList[stepIdx]?.t ?? null) : null} onPick={pickRoom} />
           : <MapViewport mpm={load.mpm} routePath={routePath} />}
         <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 6, display: 'flex', gap: 4,
-          background: '#fff', borderRadius: 10, padding: 3, boxShadow: '0 4px 14px rgba(20,35,45,.16)' }}>
+          background: 'rgba(12,10,8,0.82)', border: '1px solid rgba(201,163,95,0.35)', backdropFilter: 'blur(8px)',
+          borderRadius: 12, padding: 4, boxShadow: '0 6px 18px rgba(0,0,0,.45)' }}>
           {['2d', '3d'].map((m) => (
             <button key={m} type="button" onClick={() => setView(m)} aria-pressed={view === m}
-              style={{ border: 0, borderRadius: 8, padding: '6px 13px', fontSize: 13, fontWeight: 700,
+              style={{ border: 0, borderRadius: 9, padding: '0 18px', minHeight: 44, minWidth: 56,
+                fontSize: 'clamp(13px, 0.5vw + 9px, 18px)', fontWeight: 700,
                 cursor: 'pointer', fontFamily: 'inherit',
-                background: view === m ? '#2563eb' : 'transparent', color: view === m ? '#fff' : '#5c6b78' }}>
+                background: view === m ? 'linear-gradient(120deg,#c9a35f,#e8cc8d)' : 'transparent',
+                color: view === m ? '#241a08' : '#c9bda2' }}>
               {m.toUpperCase()}
             </button>
           ))}
         </div>
 
         {stepList.length > 0 && (
-          <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 6, maxWidth: '60%',
+          <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 6, maxWidth: 'min(calc(100% - 176px), 560px)',
             display: 'flex', alignItems: 'center', gap: 10, color: '#3a2e07',
-            background: 'linear-gradient(90deg,#d4ab4e,#ecca72)', borderRadius: 12,
-            padding: '10px 12px', boxShadow: '0 6px 18px rgba(20,35,45,.22)' }}>
-            <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{stepList[stepIdx]?.icon}</span>
-            <span style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.15 }}>{stepList[stepIdx]?.text}</span>
-            <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+            background: 'linear-gradient(90deg,#d4ab4e,#ecca72)', borderRadius: 14,
+            padding: '10px 12px', boxShadow: '0 6px 18px rgba(0,0,0,.35)' }}>
+            <span style={{ fontSize: 'clamp(22px, 1vw + 16px, 32px)', fontWeight: 800, lineHeight: 1 }}>{stepList[stepIdx]?.icon}</span>
+            <span style={{ fontSize: 'clamp(14px, 0.5vw + 11px, 20px)', fontWeight: 700, lineHeight: 1.15 }}>{stepList[stepIdx]?.text}</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
               <button type="button" aria-label="Previous step" onClick={() => { setStepped(true); setStepIdx((i) => Math.max(0, i - 1)); }}
                 disabled={stepIdx === 0}
-                style={{ border: 0, background: 'rgba(255,255,255,.7)', borderRadius: 8, width: 26, height: 26, cursor: 'pointer', fontWeight: 800, fontSize: 16 }}>‹</button>
+                style={{ border: 0, background: 'rgba(255,255,255,.72)', borderRadius: 10, width: 42, height: 42, cursor: 'pointer', fontWeight: 800, fontSize: 20 }}>‹</button>
               <button type="button" aria-label="Next step" onClick={() => { setStepped(true); setStepIdx((i) => Math.min(stepList.length - 1, i + 1)); }}
                 disabled={stepIdx === stepList.length - 1}
-                style={{ border: 0, background: 'rgba(255,255,255,.7)', borderRadius: 8, width: 26, height: 26, cursor: 'pointer', fontWeight: 800, fontSize: 16 }}>›</button>
+                style={{ border: 0, background: 'rgba(255,255,255,.72)', borderRadius: 10, width: 42, height: 42, cursor: 'pointer', fontWeight: 800, fontSize: 20 }}>›</button>
             </span>
           </div>
         )}
