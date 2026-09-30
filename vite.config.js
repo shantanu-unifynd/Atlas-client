@@ -8,4 +8,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: { port: 5174 },
+  // Force a single copy of three so drei + postprocessing share instanceof checks.
+  resolve: { dedupe: ['three'] },
+  optimizeDeps: { include: ['three'] },
 });
