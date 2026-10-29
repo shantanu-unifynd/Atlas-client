@@ -10,9 +10,10 @@ export async function computeRoute(graphId, originNodeId, destinationNodeId) {
 
 // C3-01: consume ONLY the PUBLISHED Map Presentation Model — visitors never see
 // unpublished admin drafts. Returns the render payload (model.data), unchanged
-// shape. A floor with no published version responds 404, which the page turns
-// into a friendly "map not yet published" empty state.
+// shape. A floor with no published version responds 200 with a null model
+// (older backends used 404 — the page treats both as the friendly
+// "map not yet published" empty state), so null means "nothing published".
 export async function getMapModel(floorId) {
   const { data: model } = await api.get(`/floors/${floorId}/map-model`, { params: { published: true } });
-  return model.data;
+  return model ? model.data : null;
 }

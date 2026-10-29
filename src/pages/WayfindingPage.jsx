@@ -56,7 +56,9 @@ function WayfindingPage() {
     (async () => {
       try {
         const mpm = await getMapModel(floorId);
-        if (alive) setLoad({ loading: false, error: null, mpm, notPublished: false });
+        // A null model (200 with no published version) is the same friendly
+        // "not yet published" state as the legacy 404 below.
+        if (alive) setLoad({ loading: false, error: null, mpm, notPublished: !mpm });
       } catch (e) {
         if (!alive) return;
         // C3-01: a floor with no published map returns 404 — that's an expected
