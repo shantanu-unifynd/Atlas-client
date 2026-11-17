@@ -81,8 +81,15 @@ function WayfindingPage() {
 
   const graph = load.mpm && load.mpm.graph;
   const nodes = (graph && graph.nodes) || [];
+  // Visitor picker policy: only labeled destinations whose name contains a
+  // real word (3+ letters). Unit-code-only labels — vacant/unbranded units
+  // like "SH/144" or dimension strays like "4220 x 4775" — stay routable and
+  // visible to admins in Studio, but are hidden from shoppers here (a
+  // per-unit visibility toggle is planned admin-side).
   const options = useMemo(
-    () => [...nodes].sort((a, b) => (a.label || '').localeCompare(b.label || '')),
+    () => nodes
+      .filter((n) => n.label && /[A-Za-z]{3,}/.test(n.label))
+      .sort((a, b) => (a.label || '').localeCompare(b.label || '')),
     [nodes]
   );
 
